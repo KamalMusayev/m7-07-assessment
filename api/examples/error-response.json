@@ -1,0 +1,12 @@
+{
+  "error": {
+    "code": "invalid_request",
+    "message": "limit must be between 1 and 50",
+    "request_id": "req_01HX7PX9J7K2V8",
+    "retryable": false,
+    "details": {
+      "field": "limit",
+      "expected": "1 <= limit <= 50"
+    }
+  }
+}

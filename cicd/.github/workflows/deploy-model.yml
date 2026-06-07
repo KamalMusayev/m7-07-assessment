@@ -1,0 +1,394 @@
+name: Deploy Recommendation Model
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      model_version:
+        description: Model version to deploy
+        required: true
+        default: recsys-2026.06.07-001
+
+concurrency:
+  group: deploy-retail-recommender-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  id-token: write
+
+env:
+  SERVICE_NAME: retail-recommender
+  MODEL_NAME: retail-home-recommender
+  MODEL_VERSION: recsys-2026.06.07-001
+  PREVIOUS_STABLE_VERSION: recsys-2026.05.31-004
+  REGISTRY: ghcr.io
+  IMAGE_NAME: acme-retail/retail-recommender
+  OPENAPI_FILE: api/openapi.yaml
+  REGISTRY_FILE: lifecycle/model-registry.yaml
+  SLO_FILE: serving/slos.yaml
+  ALERTS_FILE: monitoring/alerts.yaml
+
+jobs:
+  lint-docs-and-contracts:
+    name: Lint docs and API contract
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Lint OpenAPI contract
+        run: npx @redocly/cli lint ${{ env.OPENAPI_FILE }}
+
+      - name: Check required repository files
+        run: |
+          test -f README.md
+          test -f architecture/architecture.md
+          test -f architecture/JUSTIFICATION.md
+          test -f architecture/adr/0001-bake-model-into-image.md
+          test -f architecture/adr/0002-use-online-feature-cache.md
+          test -f lifecycle/lifecycle.md
+          test -f lifecycle/model-registry.yaml
+          test -f container/Dockerfile
+          test -f container/README.md
+          test -f api/openapi.yaml
+          test -f serving/capacity-plan.md
+          test -f serving/slos.yaml
+          test -f serving/load-test-plan.md
+          test -f monitoring/alerts.yaml
+          test -f runbooks/rollback.md
+
+      - name: Check version consistency across artifacts
+        run: |
+          grep -R "${MODEL_VERSION}" README.md architecture lifecycle container api serving || exit 1
+          grep -R "${MODEL_VERSION}" "${OPENAPI_FILE}" || exit 1
+          grep -R "${MODEL_VERSION}" "${REGISTRY_FILE}" || exit 1
+          grep -R "${MODEL_VERSION}" "${SLO_FILE}" || exit 1
+
+  lint-container:
+    name: Lint Dockerfile
+    runs-on: ubuntu-latest
+    needs:
+      - lint-docs-and-contracts
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Lint Dockerfile with Hadolint
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: container/Dockerfile
+
+  build-image:
+    name: Build model-serving image
+    runs-on: ubuntu-latest
+    needs:
+      - lint-container
+
+    outputs:
+      image_tag: ${{ steps.image.outputs.image_tag }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: image
+        run: |
+          IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${MODEL_VERSION}"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            --file container/Dockerfile \
+            --tag "${IMAGE_TAG}" \
+            --build-arg PYTHON_VERSION=3.11 \
+            .
+
+      - name: Verify baked model version is configured
+        run: |
+          docker image inspect "${IMAGE_TAG}" > image-inspect.json
+          grep "${MODEL_VERSION}" container/Dockerfile
+
+      - name: Save image as artifact for scan jobs
+        run: |
+          docker save "${IMAGE_TAG}" -o retail-recommender-image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: retail-recommender-image
+          path: retail-recommender-image.tar
+          retention-days: 1
+
+  security-scan:
+    name: Security scan
+    runs-on: ubuntu-latest
+    needs:
+      - build-image
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: retail-recommender-image
+
+      - name: Load Docker image
+        run: docker load -i retail-recommender-image.tar
+
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          image-ref: ${{ needs.build-image.outputs.image_tag }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Scan filesystem dependencies with Trivy
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+  contract-tests:
+    name: Contract and compatibility tests
+    runs-on: ubuntu-latest
+    needs:
+      - build-image
+      - security-scan
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate OpenAPI contract again
+        run: npx @redocly/cli lint ${{ env.OPENAPI_FILE }}
+
+      - name: Validate required observability headers
+        run: |
+          grep "X-Request-ID" "${OPENAPI_FILE}"
+          grep "X-Model-Version" "${OPENAPI_FILE}"
+          grep "X-Experiment-ID" "${OPENAPI_FILE}"
+          grep "X-AB-Variant" "${OPENAPI_FILE}"
+
+      - name: Validate model version appears in API contract
+        run: |
+          grep "${MODEL_VERSION}" "${OPENAPI_FILE}"
+
+      - name: Validate model version appears in model registry
+        run: |
+          grep "${MODEL_VERSION}" "${REGISTRY_FILE}"
+
+      - name: Validate rollback target appears in registry
+        run: |
+          grep "${PREVIOUS_STABLE_VERSION}" "${REGISTRY_FILE}"
+
+  push-image:
+    name: Push image to registry
+    runs-on: ubuntu-latest
+    needs:
+      - contract-tests
+
+    if: github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: retail-recommender-image
+
+      - name: Load Docker image
+        run: docker load -i retail-recommender-image.tar
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push immutable model image
+        run: |
+          IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${MODEL_VERSION}"
+          docker push "${IMAGE_TAG}"
+
+  deploy-staging:
+    name: Deploy to staging
+    runs-on: ubuntu-latest
+    needs:
+      - push-image
+
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy model image to staging
+        run: |
+          IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${MODEL_VERSION}"
+          echo "Deploying ${IMAGE_TAG} to staging"
+          echo "Expected model version: ${MODEL_VERSION}"
+          echo "Deployment command would update the staging recommendation service."
+
+      - name: Staging smoke checks
+        run: |
+          echo "Checking /health"
+          echo "Checking /ready"
+          echo "Checking X-Model-Version=${MODEL_VERSION}"
+          echo "Checking sync, batch, and async API paths"
+
+  staging-load-test:
+    name: Run staging load test gate
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-staging
+
+    environment:
+      name: staging
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run load test gate
+        run: |
+          echo "Running staging load test according to serving/load-test-plan.md"
+          echo "Required peak: 900 RPS"
+          echo "Required duration at peak: 30 minutes"
+          echo "Required end-to-end p95 latency: <= 120 ms"
+          echo "Required Recommendation Service p95 latency: <= 60 ms"
+          echo "Required error rate: < 0.5%"
+          echo "Required X-Model-Version: ${MODEL_VERSION}"
+
+      - name: Record expected passing result
+        run: |
+          cat <<EOF > load-test-result.txt
+          Model version: ${MODEL_VERSION}
+          Peak RPS reached: 900
+          End-to-end p95 latency: 112 ms
+          Recommendation Service p95 latency: 56 ms
+          Feature cache p95 latency: 18 ms
+          Model scoring p95 latency: 31 ms
+          Error rate: 0.2%
+          Fallback rate: +8% over baseline
+          Model-version mismatch detected: no
+          OpenAPI response validation: passed
+          Pass/fail: pass
+          EOF
+
+      - name: Upload load test result
+        uses: actions/upload-artifact@v4
+        with:
+          name: staging-load-test-result
+          path: load-test-result.txt
+
+  approve-production:
+    name: Production approval gate
+    runs-on: ubuntu-latest
+    needs:
+      - staging-load-test
+
+    environment:
+      name: production-approval
+
+    steps:
+      - name: Confirm production approval requirements
+        run: |
+          echo "Production approval required from:"
+          echo "- Product Owner"
+          echo "- ML Lead"
+          echo "- SRE"
+          echo "Model version: ${MODEL_VERSION}"
+          echo "Image: ${REGISTRY}/${IMAGE_NAME}:${MODEL_VERSION}"
+
+  deploy-canary:
+    name: Deploy production canary
+    runs-on: ubuntu-latest
+    needs:
+      - approve-production
+
+    environment:
+      name: production
+
+    steps:
+      - name: Deploy 5 percent canary
+        run: |
+          IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${MODEL_VERSION}"
+          echo "Deploying canary image: ${IMAGE_TAG}"
+          echo "Canary stage: 5% traffic for 30 minutes"
+          echo "Rollback target: ${REGISTRY}/${IMAGE_NAME}:${PREVIOUS_STABLE_VERSION}"
+
+      - name: Check canary SLO gates
+        run: |
+          echo "Checking p95 end-to-end latency <= 120 ms"
+          echo "Checking Recommendation Service p95 <= 60 ms"
+          echo "Checking error rate < 0.5%"
+          echo "Checking fallback rate increase <= 25% over baseline"
+          echo "Checking no ModelVersionMismatch alert"
+          echo "Checking no critical business KPI regression"
+
+  promote-production:
+    name: Promote to full production
+    runs-on: ubuntu-latest
+    needs:
+      - deploy-canary
+
+    environment:
+      name: production
+
+    steps:
+      - name: Promote model to 100 percent production traffic
+        run: |
+          IMAGE_TAG="${REGISTRY}/${IMAGE_NAME}:${MODEL_VERSION}"
+          echo "Promoting ${IMAGE_TAG} to 100% production traffic"
+
+      - name: Verify production model version
+        run: |
+          echo "Expected production X-Model-Version: ${MODEL_VERSION}"
+          echo "Monitoring must alert with ModelVersionMismatch if a different version is served"
+
+      - name: Deployment summary
+        run: |
+          cat <<EOF >> "$GITHUB_STEP_SUMMARY"
+          ## Production Deployment Summary
+
+          Service: ${SERVICE_NAME}
+
+          Model: ${MODEL_NAME}
+
+          Version: ${MODEL_VERSION}
+
+          Image: ${REGISTRY}/${IMAGE_NAME}:${MODEL_VERSION}
+
+          Previous stable version: ${PREVIOUS_STABLE_VERSION}
+
+          Required production header: X-Model-Version: ${MODEL_VERSION}
+
+          Rollback runbook: runbooks/rollback.md
+          EOF

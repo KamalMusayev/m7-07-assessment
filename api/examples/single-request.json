@@ -1,0 +1,13 @@
+{
+  "request_id": "req_01HX7PX9J7K2V8",
+  "user_id": "user_12345",
+  "session_id": "sess_abc123",
+  "context": {
+    "region": "AZ-BA",
+    "locale": "en-US",
+    "device_type": "ios",
+    "placement": "home_screen"
+  },
+  "limit": 10,
+  "include_explanations": false
+}

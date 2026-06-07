@@ -1,0 +1,165 @@
+service:
+  name: retail-recommender
+  model_name: retail-home-recommender
+  production_model_version: recsys-2026.06.07-001
+  scenario: scenario-x-personalized-in-app-recommendations
+  owner_team: ml-platform
+  timezone: Asia/Baku
+
+slo_period:
+  window: 30d
+  description: Monthly SLO window for the production recommendation service.
+
+traffic_assumptions:
+  average_rps: 300
+  peak_rps: 800
+  load_test_peak_rps: 900
+
+objectives:
+  availability:
+    target: 0.999
+    description: 99.9% of production time should be available monthly.
+    measurement: >
+      Percentage of time where the /ready endpoint is healthy and the service
+      can accept recommendation traffic.
+
+  successful_responses:
+    target: 0.995
+    description: At least 99.5% of recommendation requests should return successful responses.
+    good_events: >
+      HTTP 2xx responses from POST /v1/recommendations that return a valid
+      recommendation list, including fallback recommendations.
+    bad_events: >
+      HTTP 5xx responses, dependency failures that prevent a response, or
+      malformed recommendation responses.
+
+  end_to_end_latency:
+    target: 0.95
+    threshold_ms: 120
+    description: 95% of online recommendation requests must complete within 120 ms end-to-end.
+    endpoint: POST /v1/recommendations
+
+  recommendation_service_latency:
+    target: 0.95
+    threshold_ms: 60
+    description: 95% of Recommendation Service processing should complete within 60 ms.
+    endpoint: POST /v1/recommendations
+
+  feature_cache_latency:
+    target: 0.95
+    threshold_ms: 20
+    description: 95% of online feature cache lookups should complete within 20 ms.
+
+  model_scoring_latency:
+    target: 0.95
+    threshold_ms: 35
+    description: 95% of model scoring calls should complete within 35 ms.
+
+  error_rate:
+    threshold: 0.005
+    description: Error rate must stay below 0.5% for the online recommendation endpoint.
+
+  fallback_rate:
+    max_increase_over_baseline: 0.25
+    description: >
+      Fallback recommendation rate should not increase by more than 25% over
+      the recent production baseline. Fallback responses are successful responses,
+      but a spike may indicate feature cache, feature schema, or model issues.
+
+  model_version_consistency:
+    expected_header: X-Model-Version
+    expected_value: recsys-2026.06.07-001
+    description: >
+      Every production recommendation response must report the expected model
+      version. A mismatch triggers ModelVersionMismatch.
+
+sli_definitions:
+  availability_sli:
+    query: >
+      avg_over_time(up{service="retail-recommender"}[30d])
+
+  success_rate_sli:
+    query: >
+      sum(rate(http_requests_total{service="retail-recommender",endpoint="/v1/recommendations",status=~"2.."}[5m]))
+      /
+      sum(rate(http_requests_total{service="retail-recommender",endpoint="/v1/recommendations"}[5m]))
+
+  end_to_end_latency_sli:
+    query: >
+      histogram_quantile(0.95,
+        sum(rate(http_request_duration_ms_bucket{service="retail-recommender",endpoint="/v1/recommendations"}[5m])) by (le)
+      )
+
+  recommendation_service_latency_sli:
+    query: >
+      histogram_quantile(0.95,
+        sum(rate(recommendation_service_duration_ms_bucket{service="retail-recommender"}[5m])) by (le)
+      )
+
+  feature_cache_latency_sli:
+    query: >
+      histogram_quantile(0.95,
+        sum(rate(feature_cache_lookup_duration_ms_bucket{service="retail-recommender"}[5m])) by (le)
+      )
+
+  model_scoring_latency_sli:
+    query: >
+      histogram_quantile(0.95,
+        sum(rate(model_scoring_duration_ms_bucket{service="retail-recommender",model_version="recsys-2026.06.07-001"}[5m])) by (le)
+      )
+
+  fallback_rate_sli:
+    query: >
+      sum(rate(recommendation_fallback_total{service="retail-recommender"}[5m]))
+      /
+      sum(rate(recommendation_requests_total{service="retail-recommender"}[5m]))
+
+  model_version_consistency_sli:
+    query: >
+      count(model_version_info{service="retail-recommender",model_version!="recsys-2026.06.07-001"})
+
+error_budget:
+  availability:
+    monthly_budget: 0.001
+    description: 0.1% monthly unavailability budget for 99.9% availability.
+
+  successful_responses:
+    monthly_budget: 0.005
+    description: 0.5% monthly bad-response budget for 99.5% success rate.
+
+burn_rate_alerts:
+  latency:
+    page:
+      short_window: 5m
+      long_window: 1h
+      condition: p95_end_to_end_latency_ms > 120
+      alert_name: HighLatencyBurnRate
+    ticket:
+      short_window: 30m
+      long_window: 6h
+      condition: p95_end_to_end_latency_ms > 120
+      alert_name: HighLatencySlowBurn
+
+  errors:
+    page:
+      short_window: 5m
+      long_window: 1h
+      condition: error_rate > 0.005
+      alert_name: HighErrorRateBurnRate
+    ticket:
+      short_window: 30m
+      long_window: 6h
+      condition: error_rate > 0.005
+      alert_name: HighErrorRateSlowBurn
+
+rollback_related_slos:
+  - end_to_end_latency
+  - recommendation_service_latency
+  - error_rate
+  - fallback_rate
+  - model_version_consistency
+
+notes:
+  - Fallback recommendations count as successful responses if the API returns a valid response.
+  - A fallback spike is still treated as a production risk because it may hide feature or model problems.
+  - The expected production model version must match the registry, API, monitoring, CI/CD, and rollback runbook.

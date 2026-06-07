@@ -1,0 +1,53 @@
+{
+  "batch_id": "batch_2026_06_07_001",
+  "model_version": "recsys-2026.06.07-001",
+  "generated_at": "2026-06-07T18:30:00+04:00",
+  "responses": [
+    {
+      "request_id": "req_batch_001",
+      "user_id": "user_12345",
+      "session_id": "sess_abc123",
+      "model_version": "recsys-2026.06.07-001",
+      "experiment_id": "exp_home_recs_2026_06",
+      "ab_variant": "treatment",
+      "generated_at": "2026-06-07T18:30:00+04:00",
+      "fallback_used": false,
+      "recommendations": [
+        {
+          "product_id": "prod_10001",
+          "rank": 1,
+          "score": 0.982,
+          "reason_code": "recent_category_interest"
+        }
+      ],
+      "metadata": {
+        "feature_cache_hit": true,
+        "candidate_count": 250,
+        "latency_ms": 51
+      }
+    },
+    {
+      "request_id": "req_batch_002",
+      "user_id": "user_67890",
+      "session_id": "sess_def456",
+      "model_version": "recsys-2026.06.07-001",
+      "experiment_id": "exp_home_recs_2026_06",
+      "ab_variant": "control",
+      "generated_at": "2026-06-07T18:30:00+04:00",
+      "fallback_used": true,
+      "recommendations": [
+        {
+          "product_id": "prod_20001",
+          "rank": 1,
+          "score": 0.801,
+          "reason_code": "trending_in_region"
+        }
+      ],
+      "metadata": {
+        "feature_cache_hit": false,
+        "candidate_count": 100,
+        "latency_ms": 39
+      }
+    }
+  ]
+}

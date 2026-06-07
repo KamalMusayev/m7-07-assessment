@@ -1,0 +1,37 @@
+{
+  "job_id": "job_recs_2026_06_07_001",
+  "status": "completed",
+  "submitted_at": "2026-06-07T18:30:00+04:00",
+  "completed_at": "2026-06-07T18:30:12+04:00",
+  "model_version": "recsys-2026.06.07-001",
+  "result": {
+    "batch_id": "job_recs_2026_06_07_001",
+    "model_version": "recsys-2026.06.07-001",
+    "generated_at": "2026-06-07T18:30:12+04:00",
+    "responses": [
+      {
+        "request_id": "req_async_001",
+        "user_id": "user_12345",
+        "session_id": "sess_abc123",
+        "model_version": "recsys-2026.06.07-001",
+        "experiment_id": "exp_home_recs_2026_06",
+        "ab_variant": "treatment",
+        "generated_at": "2026-06-07T18:30:12+04:00",
+        "fallback_used": false,
+        "recommendations": [
+          {
+            "product_id": "prod_10001",
+            "rank": 1,
+            "score": 0.982,
+            "reason_code": "recent_category_interest"
+          }
+        ],
+        "metadata": {
+          "feature_cache_hit": true,
+          "candidate_count": 250,
+          "latency_ms": 50
+        }
+      }
+    ]
+  }
+}

@@ -1,0 +1,170 @@
+registry:
+  name: retail-recommendation-model-registry
+  owner_team: ml-platform
+  environment: production
+  registry_version: "1.0"
+
+model:
+  name: retail-home-recommender
+  task: personalized-product-ranking
+  scenario: scenario-x-personalized-in-app-recommendations
+  description: >
+    Ranks candidate products for the mobile retail app home screen using the
+    user's last 30 days of browsing and purchase behavior. Cold-start users
+    are served through trending, category-popularity, and seasonal fallback logic.
+
+production_version:
+  version: recsys-2026.06.07-001
+  status: production
+  created_at: "2026-06-07T10:00:00+04:00"
+  promoted_at: "2026-06-07T18:30:00+04:00"
+
+  artifact:
+    type: baked-container-image
+    image: ghcr.io/acme-retail/retail-recommender:recsys-2026.06.07-001
+    model_path_in_image: /opt/model/retail-home-recommender
+    artifact_checksum: sha256:4d5f7c6b9f7f1f8a7e2c2c6e5f8a9b0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b
+    estimated_model_size_mb: 250
+
+  lineage:
+    training_dataset_version: retail-events-2026.06.01-to-2026.06.06
+    feature_schema_version: features-v2026.06.07
+    training_code_commit: 9f7a2c6d4e8b1a3c5d6e7f8091a2b3c4d5e6f708
+    training_pipeline_run_id: train-recsys-2026-06-07-001
+    build_pipeline_run_id: build-recsys-2026-06-07-001
+    openapi_contract_version: openapi-v2026.06.07
+    dockerfile_version: dockerfile-v2026.06.07
+
+  offline_metrics:
+    ndcg_at_10: 0.412
+    ndcg_at_10_baseline: 0.398
+    ndcg_at_10_relative_improvement: 0.035
+    recall_at_20: 0.684
+    recall_at_20_baseline: 0.681
+    catalog_coverage: 0.88
+    cold_start_coverage: 0.97
+    segment_regression_check: passed
+
+  performance_tests:
+    local_inference_p95_ms: 31
+    staging_recommendation_service_p95_ms: 56
+    staging_end_to_end_p95_ms: 112
+    staging_peak_load_test_rps: 900
+    staging_error_rate: 0.002
+    load_test_duration_minutes: 30
+    passed: true
+
+  production_slos:
+    peak_rps: 800
+    end_to_end_p95_latency_ms: 120
+    recommendation_service_p95_latency_ms: 60
+    success_rate_target: 0.995
+    availability_target: 0.999
+
+  api_contract:
+    required_response_headers:
+      - X-Request-ID
+      - X-Model-Version
+      - X-Experiment-ID
+      - X-AB-Variant
+    expected_model_version_header: "X-Model-Version: recsys-2026.06.07-001"
+
+  monitoring:
+    expected_model_version: recsys-2026.06.07-001
+    model_version_mismatch_alert: ModelVersionMismatch
+    latency_burn_rate_alert: HighLatencyBurnRate
+    error_burn_rate_alert: HighErrorRateBurnRate
+    fallback_spike_alert: RecommendationFallbackSpike
+    drift_alert: FeatureDriftDetected
+
+  approvals:
+    registered_by:
+      name: Aylin Mammadova
+      role: ML Engineer
+      approved_at: "2026-06-07T11:00:00+04:00"
+
+    staging_approved_by:
+      name: Murad Aliyev
+      role: ML Platform Engineer
+      approved_at: "2026-06-07T14:00:00+04:00"
+
+    canary_approved_by:
+      - name: Leyla Karimova
+        role: Product Owner
+        approved_at: "2026-06-07T16:30:00+04:00"
+      - name: Rauf Huseynov
+        role: ML Lead
+        approved_at: "2026-06-07T16:35:00+04:00"
+
+    production_approved_by:
+      - name: Leyla Karimova
+        role: Product Owner
+        approved_at: "2026-06-07T18:20:00+04:00"
+      - name: Rauf Huseynov
+        role: ML Lead
+        approved_at: "2026-06-07T18:22:00+04:00"
+      - name: Nigar Abbasova
+        role: SRE
+        approved_at: "2026-06-07T18:25:00+04:00"
+
+  rollback:
+    previous_stable_version: recsys-2026.05.31-004
+    previous_stable_image: ghcr.io/acme-retail/retail-recommender:recsys-2026.05.31-004
+    rollback_runbook: runbooks/rollback.md
+    rollback_allowed_by:
+      - on-call-sre
+      - ml-platform-lead
+
+promotion_gates:
+  data_validation:
+    required_fields_present: 1.0
+    max_duplicate_event_rate: 0.005
+    max_invalid_product_id_rate: 0.002
+    max_future_timestamp_rate: 0.001
+    max_missing_user_or_session_id_rate: 0.01
+    max_event_freshness_lag_p95_minutes: 15
+
+  offline_evaluation:
+    min_ndcg_at_10_relative_improvement: 0.02
+    max_recall_at_20_drop: 0.01
+    min_catalog_coverage: 0.85
+    min_cold_start_coverage: 0.95
+    max_local_inference_p95_ms: 35
+    max_model_size_mb: 300
+    require_segment_regression_check: true
+
+  staging:
+    require_openapi_contract_tests: true
+    require_health_check: true
+    require_readiness_check: true
+    require_sync_endpoint_test: true
+    require_batch_endpoint_test: true
+    require_async_endpoint_test: true
+    require_metrics_emission_test: true
+    require_fallback_path_test: true
+
+  load_test:
+    required_peak_rps: 900
+    max_end_to_end_p95_latency_ms: 120
+    max_recommendation_service_p95_latency_ms: 60
+    max_error_rate: 0.005
+    min_duration_minutes: 30
+
+  canary:
+    stages:
+      - traffic_percent: 5
+        minimum_observation_minutes: 30
+      - traffic_percent: 25
+        minimum_observation_minutes: 60
+    max_end_to_end_p95_latency_ms: 120
+    max_recommendation_service_p95_latency_ms: 60
+    max_error_rate: 0.005
+    max_fallback_rate_increase_over_baseline: 0.25
+    require_no_model_version_mismatch: true
+    require_no_critical_business_kpi_regression: true
+
+retention:
+  keep_production_versions: 10
+  keep_candidate_versions_days: 30
+  keep_training_lineage_days: 180
+  keep_approval_records_days: 365

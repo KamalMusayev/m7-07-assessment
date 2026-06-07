@@ -1,0 +1,29 @@
+{
+  "request_id": "req_01HX7PX9J7K2V8",
+  "user_id": "user_12345",
+  "session_id": "sess_abc123",
+  "model_version": "recsys-2026.06.07-001",
+  "experiment_id": "exp_home_recs_2026_06",
+  "ab_variant": "treatment",
+  "generated_at": "2026-06-07T18:30:00+04:00",
+  "fallback_used": false,
+  "recommendations": [
+    {
+      "product_id": "prod_10001",
+      "rank": 1,
+      "score": 0.982,
+      "reason_code": "recent_category_interest"
+    },
+    {
+      "product_id": "prod_10019",
+      "rank": 2,
+      "score": 0.941,
+      "reason_code": "similar_to_recent_purchase"
+    }
+  ],
+  "metadata": {
+    "feature_cache_hit": true,
+    "candidate_count": 250,
+    "latency_ms": 48
+  }
+}

@@ -1,0 +1,1060 @@
+openapi: 3.1.0
+
+info:
+  title: Retail Home Recommendation API
+  version: "2026.06.07"
+  license:
+    name: MIT
+  summary: API contract for personalized retail home-screen recommendations.
+  description: >
+    This OpenAPI contract defines the online recommendation API for Scenario X:
+    personalized in-app recommendations for a B2C retail mobile application.
+    The API supports synchronous, batch, and asynchronous recommendation flows.
+    Every recommendation response includes observability headers so requests can
+    be traced by request ID, model version, experiment ID, and A/B variant.
+
+servers:
+  - url: https://api.acme-retail.com
+    description: Production
+  - url: https://staging-api.acme-retail.com
+    description: Staging
+
+tags:
+  - name: Recommendations
+    description: Personalized recommendation endpoints.
+  - name: Jobs
+    description: Asynchronous recommendation job endpoints.
+  - name: Health
+    description: Service health and readiness endpoints.
+
+security:
+  - ApiKeyAuth: []
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      operationId: getHealth
+      summary: Health check
+      description: >
+        Returns whether the service process is alive. This endpoint is lightweight
+        and does not require the model or feature cache to be fully ready.
+      security: []
+      responses:
+        "200":
+          description: Service process is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+              examples:
+                healthy:
+                  value:
+                    status: healthy
+                    service: retail-recommender
+                    timestamp: "2026-06-07T18:30:00+04:00"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+  /ready:
+    get:
+      tags:
+        - Health
+      operationId: getReadiness
+      summary: Readiness check
+      description: >
+        Returns whether the service is ready to accept recommendation traffic.
+        This endpoint checks that the model is loaded and required dependencies
+        are reachable or safely degraded.
+      security: []
+      responses:
+        "200":
+          description: Service is ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+              examples:
+                ready:
+                  value:
+                    status: ready
+                    service: retail-recommender
+                    model_name: retail-home-recommender
+                    model_version: recsys-2026.06.07-001
+                    dependencies:
+                      model_runtime: ready
+                      feature_cache: ready
+                      product_catalog: ready
+                    timestamp: "2026-06-07T18:30:00+04:00"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "503":
+          description: Service is not ready for traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadinessResponse"
+              examples:
+                notReady:
+                  value:
+                    status: not_ready
+                    service: retail-recommender
+                    model_name: retail-home-recommender
+                    model_version: recsys-2026.06.07-001
+                    dependencies:
+                      model_runtime: not_ready
+                      feature_cache: degraded
+                      product_catalog: ready
+                    timestamp: "2026-06-07T18:30:00+04:00"
+
+  /v1/recommendations:
+    post:
+      tags:
+        - Recommendations
+      operationId: createRecommendations
+      summary: Create personalized recommendations for one user
+      description: >
+        Returns a ranked list of product recommendations for a single home-screen
+        request. This is the main low-latency online endpoint and must stay within
+        the 120 ms end-to-end p95 latency budget.
+      parameters:
+        - $ref: "#/components/parameters/RequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecommendationRequest"
+            examples:
+              personalizedUser:
+                value:
+                  request_id: req_01HX7PX9J7K2V8
+                  user_id: user_12345
+                  session_id: sess_abc123
+                  context:
+                    region: AZ-BA
+                    locale: en-US
+                    device_type: ios
+                    placement: home_screen
+                  limit: 10
+                  include_explanations: false
+              coldStartUser:
+                value:
+                  request_id: req_01HX7PX9J7K2V9
+                  session_id: sess_new_001
+                  context:
+                    region: AZ-BA
+                    locale: en-US
+                    device_type: android
+                    placement: home_screen
+                  limit: 10
+                  include_explanations: false
+      responses:
+        "200":
+          description: Ranked recommendations were created successfully.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+            X-Model-Version:
+              $ref: "#/components/headers/XModelVersion"
+            X-Experiment-ID:
+              $ref: "#/components/headers/XExperimentID"
+            X-AB-Variant:
+              $ref: "#/components/headers/XABVariant"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationResponse"
+              examples:
+                success:
+                  value:
+                    request_id: req_01HX7PX9J7K2V8
+                    user_id: user_12345
+                    session_id: sess_abc123
+                    model_version: recsys-2026.06.07-001
+                    experiment_id: exp_home_recs_2026_06
+                    ab_variant: treatment
+                    generated_at: "2026-06-07T18:30:00+04:00"
+                    fallback_used: false
+                    recommendations:
+                      - product_id: prod_10001
+                        rank: 1
+                        score: 0.982
+                        reason_code: recent_category_interest
+                      - product_id: prod_10019
+                        rank: 2
+                        score: 0.941
+                        reason_code: similar_to_recent_purchase
+                    metadata:
+                      feature_cache_hit: true
+                      candidate_count: 250
+                      latency_ms: 48
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/recommendations:batch:
+    post:
+      tags:
+        - Recommendations
+      operationId: createBatchRecommendations
+      summary: Create recommendations for multiple users
+      description: >
+        Returns recommendations for multiple users in one request. This endpoint
+        is intended for internal batch use cases such as pre-warming caches,
+        campaign previews, or controlled backfills. It is not the primary mobile
+        home-screen path.
+      parameters:
+        - $ref: "#/components/parameters/RequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchRecommendationRequest"
+            examples:
+              batch:
+                value:
+                  batch_id: batch_2026_06_07_001
+                  requests:
+                    - request_id: req_batch_001
+                      user_id: user_12345
+                      session_id: sess_abc123
+                      context:
+                        region: AZ-BA
+                        locale: en-US
+                        device_type: ios
+                        placement: home_screen
+                      limit: 10
+                      include_explanations: false
+                    - request_id: req_batch_002
+                      user_id: user_67890
+                      session_id: sess_def456
+                      context:
+                        region: AZ-BA
+                        locale: en-US
+                        device_type: android
+                        placement: home_screen
+                      limit: 10
+                      include_explanations: false
+      responses:
+        "200":
+          description: Batch recommendations were created successfully.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+            X-Model-Version:
+              $ref: "#/components/headers/XModelVersion"
+            X-Experiment-ID:
+              $ref: "#/components/headers/XExperimentID"
+            X-AB-Variant:
+              $ref: "#/components/headers/XABVariant"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchRecommendationResponse"
+              examples:
+                success:
+                  value:
+                    batch_id: batch_2026_06_07_001
+                    model_version: recsys-2026.06.07-001
+                    generated_at: "2026-06-07T18:30:00+04:00"
+                    responses:
+                      - request_id: req_batch_001
+                        user_id: user_12345
+                        session_id: sess_abc123
+                        model_version: recsys-2026.06.07-001
+                        experiment_id: exp_home_recs_2026_06
+                        ab_variant: treatment
+                        generated_at: "2026-06-07T18:30:00+04:00"
+                        fallback_used: false
+                        recommendations:
+                          - product_id: prod_10001
+                            rank: 1
+                            score: 0.982
+                            reason_code: recent_category_interest
+                        metadata:
+                          feature_cache_hit: true
+                          candidate_count: 250
+                          latency_ms: 51
+                      - request_id: req_batch_002
+                        user_id: user_67890
+                        session_id: sess_def456
+                        model_version: recsys-2026.06.07-001
+                        experiment_id: exp_home_recs_2026_06
+                        ab_variant: control
+                        generated_at: "2026-06-07T18:30:00+04:00"
+                        fallback_used: true
+                        recommendations:
+                          - product_id: prod_20001
+                            rank: 1
+                            score: 0.801
+                            reason_code: trending_in_region
+                        metadata:
+                          feature_cache_hit: false
+                          candidate_count: 100
+                          latency_ms: 39
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/recommendations:async:
+    post:
+      tags:
+        - Recommendations
+      operationId: createAsyncRecommendationJob
+      summary: Create an asynchronous recommendation job
+      description: >
+        Creates an asynchronous recommendation job for larger internal workloads.
+        The client receives a job ID and checks job status through GET /v1/jobs/{job_id}.
+      parameters:
+        - $ref: "#/components/parameters/RequestIdHeader"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsyncRecommendationRequest"
+            examples:
+              asyncJob:
+                value:
+                  job_id: job_recs_2026_06_07_001
+                  priority: normal
+                  callback_url: https://internal-client.example.com/recommendation-callback
+                  requests:
+                    - request_id: req_async_001
+                      user_id: user_12345
+                      session_id: sess_abc123
+                      context:
+                        region: AZ-BA
+                        locale: en-US
+                        device_type: ios
+                        placement: home_screen
+                      limit: 10
+                      include_explanations: false
+      responses:
+        "202":
+          description: Recommendation job was accepted.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+            X-Model-Version:
+              $ref: "#/components/headers/XModelVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncJobAcceptedResponse"
+              examples:
+                accepted:
+                  value:
+                    job_id: job_recs_2026_06_07_001
+                    status: queued
+                    submitted_at: "2026-06-07T18:30:00+04:00"
+                    model_version: recsys-2026.06.07-001
+                    status_url: /v1/jobs/job_recs_2026_06_07_001
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalError"
+        "503":
+          $ref: "#/components/responses/ServiceUnavailable"
+
+  /v1/jobs/{job_id}:
+    get:
+      tags:
+        - Jobs
+      operationId: getRecommendationJob
+      summary: Get asynchronous recommendation job status
+      description: >
+        Returns the current status of an asynchronous recommendation job.
+        Completed jobs include recommendation results.
+      parameters:
+        - $ref: "#/components/parameters/JobIdPath"
+        - $ref: "#/components/parameters/RequestIdHeader"
+      responses:
+        "200":
+          description: Job status was returned successfully.
+          headers:
+            X-Request-ID:
+              $ref: "#/components/headers/XRequestID"
+            X-Model-Version:
+              $ref: "#/components/headers/XModelVersion"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AsyncJobStatusResponse"
+              examples:
+                completed:
+                  value:
+                    job_id: job_recs_2026_06_07_001
+                    status: completed
+                    submitted_at: "2026-06-07T18:30:00+04:00"
+                    completed_at: "2026-06-07T18:30:12+04:00"
+                    model_version: recsys-2026.06.07-001
+                    result:
+                      batch_id: job_recs_2026_06_07_001
+                      model_version: recsys-2026.06.07-001
+                      generated_at: "2026-06-07T18:30:12+04:00"
+                      responses:
+                        - request_id: req_async_001
+                          user_id: user_12345
+                          session_id: sess_abc123
+                          model_version: recsys-2026.06.07-001
+                          experiment_id: exp_home_recs_2026_06
+                          ab_variant: treatment
+                          generated_at: "2026-06-07T18:30:12+04:00"
+                          fallback_used: false
+                          recommendations:
+                            - product_id: prod_10001
+                              rank: 1
+                              score: 0.982
+                              reason_code: recent_category_interest
+                          metadata:
+                            feature_cache_hit: true
+                            candidate_count: 250
+                            latency_ms: 50
+                running:
+                  value:
+                    job_id: job_recs_2026_06_07_001
+                    status: running
+                    submitted_at: "2026-06-07T18:30:00+04:00"
+                    completed_at: null
+                    model_version: recsys-2026.06.07-001
+                    result: null
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: API key used by trusted mobile backend and internal services.
+
+  parameters:
+    RequestIdHeader:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: >
+        Optional client-provided request ID. If not provided, the service generates one.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+      example: req_01HX7PX9J7K2V8
+
+    JobIdPath:
+      name: job_id
+      in: path
+      required: true
+      description: Asynchronous recommendation job identifier.
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 128
+      example: job_recs_2026_06_07_001
+
+  headers:
+    XRequestID:
+      description: Unique request ID used for tracing across services.
+      schema:
+        type: string
+      example: req_01HX7PX9J7K2V8
+
+    XModelVersion:
+      description: Active model version that served the request.
+      schema:
+        type: string
+        enum:
+          - recsys-2026.06.07-001
+      example: recsys-2026.06.07-001
+
+    XExperimentID:
+      description: Experiment identifier used for A/B testing.
+      schema:
+        type: string
+      example: exp_home_recs_2026_06
+
+    XABVariant:
+      description: A/B test variant assigned to the request.
+      schema:
+        type: string
+        enum:
+          - control
+          - treatment
+          - batch-mixed
+          - not_applicable
+      example: treatment
+
+  responses:
+    BadRequest:
+      description: Request validation failed.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            invalidLimit:
+              value:
+                error:
+                  code: invalid_request
+                  message: limit must be between 1 and 50
+                  request_id: req_01HX7PX9J7K2V8
+                  retryable: false
+                  details:
+                    field: limit
+                    expected: "1 <= limit <= 50"
+
+    Unauthorized:
+      description: API key is missing or invalid.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            unauthorized:
+              value:
+                error:
+                  code: unauthorized
+                  message: Missing or invalid API key
+                  request_id: req_01HX7PX9J7K2V8
+                  retryable: false
+                  details: {}
+
+    NotFound:
+      description: Requested resource was not found.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            jobNotFound:
+              value:
+                error:
+                  code: not_found
+                  message: Recommendation job was not found
+                  request_id: req_01HX7PX9J7K2V8
+                  retryable: false
+                  details:
+                    resource: job
+
+    TooManyRequests:
+      description: Client exceeded allowed request rate.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            rateLimited:
+              value:
+                error:
+                  code: rate_limited
+                  message: Too many requests
+                  request_id: req_01HX7PX9J7K2V8
+                  retryable: true
+                  details:
+                    retry_after_seconds: 30
+
+    InternalError:
+      description: Unexpected server error.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            internal:
+              value:
+                error:
+                  code: internal_error
+                  message: Unexpected recommendation service error
+                  request_id: req_01HX7PX9J7K2V8
+                  retryable: true
+                  details: {}
+
+    ServiceUnavailable:
+      description: Service is temporarily unavailable.
+      headers:
+        X-Request-ID:
+          $ref: "#/components/headers/XRequestID"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          examples:
+            unavailable:
+              value:
+                error:
+                  code: service_unavailable
+                  message: Recommendation service is temporarily unavailable
+                  request_id: req_01HX7PX9J7K2V8
+                  retryable: true
+                  details:
+                    dependency: model_runtime
+
+  schemas:
+    HealthResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - service
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum:
+            - healthy
+        service:
+          type: string
+          example: retail-recommender
+        timestamp:
+          type: string
+          format: date-time
+
+    ReadinessResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - status
+        - service
+        - model_name
+        - model_version
+        - dependencies
+        - timestamp
+      properties:
+        status:
+          type: string
+          enum:
+            - ready
+            - not_ready
+        service:
+          type: string
+          example: retail-recommender
+        model_name:
+          type: string
+          example: retail-home-recommender
+        model_version:
+          type: string
+          example: recsys-2026.06.07-001
+        dependencies:
+          type: object
+          additionalProperties:
+            type: string
+            enum:
+              - ready
+              - degraded
+              - not_ready
+          example:
+            model_runtime: ready
+            feature_cache: ready
+            product_catalog: ready
+        timestamp:
+          type: string
+          format: date-time
+
+    RecommendationContext:
+      type: object
+      additionalProperties: false
+      required:
+        - region
+        - locale
+        - device_type
+        - placement
+      properties:
+        region:
+          type: string
+          description: User region used for catalog and fallback rules.
+          example: AZ-BA
+        locale:
+          type: string
+          description: User locale.
+          example: en-US
+        device_type:
+          type: string
+          enum:
+            - ios
+            - android
+            - web
+          example: ios
+        placement:
+          type: string
+          enum:
+            - home_screen
+            - category_page
+            - cart
+          example: home_screen
+
+    RecommendationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - session_id
+        - context
+        - limit
+      properties:
+        request_id:
+          type: string
+          minLength: 8
+          maxLength: 128
+          example: req_01HX7PX9J7K2V8
+        user_id:
+          type: string
+          minLength: 3
+          maxLength: 128
+          description: >
+            Known user identifier. If missing, the service treats the request as
+            anonymous or cold-start using session_id.
+          example: user_12345
+        session_id:
+          type: string
+          minLength: 3
+          maxLength: 128
+          example: sess_abc123
+        context:
+          $ref: "#/components/schemas/RecommendationContext"
+        limit:
+          type: integer
+          minimum: 1
+          maximum: 50
+          default: 10
+          example: 10
+        include_explanations:
+          type: boolean
+          default: false
+          description: Whether to include lightweight recommendation reason codes.
+
+    ProductRecommendation:
+      type: object
+      additionalProperties: false
+      required:
+        - product_id
+        - rank
+        - score
+        - reason_code
+      properties:
+        product_id:
+          type: string
+          example: prod_10001
+        rank:
+          type: integer
+          minimum: 1
+          example: 1
+        score:
+          type: number
+          minimum: 0
+          maximum: 1
+          example: 0.982
+        reason_code:
+          type: string
+          enum:
+            - recent_category_interest
+            - similar_to_recent_purchase
+            - preferred_brand
+            - trending_in_region
+            - popular_in_category
+            - seasonal_campaign
+            - default_business_ranking
+          example: recent_category_interest
+
+    RecommendationMetadata:
+      type: object
+      additionalProperties: false
+      required:
+        - feature_cache_hit
+        - candidate_count
+        - latency_ms
+      properties:
+        feature_cache_hit:
+          type: boolean
+          example: true
+        candidate_count:
+          type: integer
+          minimum: 0
+          example: 250
+        latency_ms:
+          type: integer
+          minimum: 0
+          example: 48
+
+    RecommendationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - request_id
+        - session_id
+        - model_version
+        - experiment_id
+        - ab_variant
+        - generated_at
+        - fallback_used
+        - recommendations
+        - metadata
+      properties:
+        request_id:
+          type: string
+          example: req_01HX7PX9J7K2V8
+        user_id:
+          type: string
+          example: user_12345
+        session_id:
+          type: string
+          example: sess_abc123
+        model_version:
+          type: string
+          enum:
+            - recsys-2026.06.07-001
+          example: recsys-2026.06.07-001
+        experiment_id:
+          type: string
+          example: exp_home_recs_2026_06
+        ab_variant:
+          type: string
+          enum:
+            - control
+            - treatment
+            - not_applicable
+          example: treatment
+        generated_at:
+          type: string
+          format: date-time
+        fallback_used:
+          type: boolean
+          example: false
+        recommendations:
+          type: array
+          minItems: 0
+          maxItems: 50
+          items:
+            $ref: "#/components/schemas/ProductRecommendation"
+        metadata:
+          $ref: "#/components/schemas/RecommendationMetadata"
+
+    BatchRecommendationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - batch_id
+        - requests
+      properties:
+        batch_id:
+          type: string
+          minLength: 8
+          maxLength: 128
+          example: batch_2026_06_07_001
+        requests:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/RecommendationRequest"
+
+    BatchRecommendationResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - batch_id
+        - model_version
+        - generated_at
+        - responses
+      properties:
+        batch_id:
+          type: string
+          example: batch_2026_06_07_001
+        model_version:
+          type: string
+          enum:
+            - recsys-2026.06.07-001
+          example: recsys-2026.06.07-001
+        generated_at:
+          type: string
+          format: date-time
+        responses:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            $ref: "#/components/schemas/RecommendationResponse"
+
+    AsyncRecommendationRequest:
+      type: object
+      additionalProperties: false
+      required:
+        - job_id
+        - priority
+        - requests
+      properties:
+        job_id:
+          type: string
+          minLength: 8
+          maxLength: 128
+          example: job_recs_2026_06_07_001
+        priority:
+          type: string
+          enum:
+            - low
+            - normal
+            - high
+          default: normal
+        callback_url:
+          type: string
+          format: uri
+          description: Optional callback URL for internal clients.
+          example: https://internal-client.example.com/recommendation-callback
+        requests:
+          type: array
+          minItems: 1
+          maxItems: 10000
+          items:
+            $ref: "#/components/schemas/RecommendationRequest"
+
+    AsyncJobAcceptedResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - job_id
+        - status
+        - submitted_at
+        - model_version
+        - status_url
+      properties:
+        job_id:
+          type: string
+          example: job_recs_2026_06_07_001
+        status:
+          type: string
+          enum:
+            - queued
+        submitted_at:
+          type: string
+          format: date-time
+        model_version:
+          type: string
+          enum:
+            - recsys-2026.06.07-001
+          example: recsys-2026.06.07-001
+        status_url:
+          type: string
+          example: /v1/jobs/job_recs_2026_06_07_001
+
+    AsyncJobStatusResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - job_id
+        - status
+        - submitted_at
+        - completed_at
+        - model_version
+        - result
+      properties:
+        job_id:
+          type: string
+          example: job_recs_2026_06_07_001
+        status:
+          type: string
+          enum:
+            - queued
+            - running
+            - completed
+            - failed
+            - cancelled
+        submitted_at:
+          type: string
+          format: date-time
+        completed_at:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+        model_version:
+          type: string
+          enum:
+            - recsys-2026.06.07-001
+          example: recsys-2026.06.07-001
+        result:
+          oneOf:
+            - $ref: "#/components/schemas/BatchRecommendationResponse"
+            - type: "null"
+
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required:
+            - code
+            - message
+            - request_id
+            - retryable
+            - details
+          properties:
+            code:
+              type: string
+              enum:
+                - invalid_request
+                - unauthorized
+                - not_found
+                - rate_limited
+                - internal_error
+                - service_unavailable
+              example: invalid_request
+            message:
+              type: string
+              example: limit must be between 1 and 50
+            request_id:
+              type: string
+              example: req_01HX7PX9J7K2V8
+            retryable:
+              type: boolean
+              example: false
+            details:
+              type: object
+              additionalProperties: true
+              example:
+                field: limit
+                expected: "1 <= limit <= 50"

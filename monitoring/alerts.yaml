@@ -1,0 +1,391 @@
+groups:
+  - name: retail-recommender-slo-alerts
+    owner_team: ml-platform
+    service: retail-recommender
+    model_name: retail-home-recommender
+    expected_model_version: recsys-2026.06.07-001
+
+    rules:
+      - alert: HighLatencyBurnRate
+        severity: page
+        description: >
+          End-to-end p95 latency for POST /v1/recommendations is above the
+          120 ms SLO threshold in both short and long windows.
+        expr: >
+          (
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_ms_bucket{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[5m])) by (le)
+            ) > 120
+          )
+          and
+          (
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_ms_bucket{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[1h])) by (le)
+            ) > 120
+          )
+        for: 5m
+        labels:
+          team: ml-platform
+          severity: page
+          slo: end_to_end_latency
+          rollback_related: "true"
+        annotations:
+          summary: "High latency burn rate for recommendation API"
+          impact: "Users may experience slow home-screen recommendations."
+          runbook: "runbooks/rollback.md"
+          threshold: "p95 end-to-end latency must stay <= 120 ms"
+          expected_model_version: "recsys-2026.06.07-001"
+
+      - alert: HighLatencySlowBurn
+        severity: ticket
+        description: >
+          End-to-end p95 latency is above the 120 ms threshold over a longer
+          observation window. This may indicate a slower regression.
+        expr: >
+          (
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_ms_bucket{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[30m])) by (le)
+            ) > 120
+          )
+          and
+          (
+            histogram_quantile(0.95,
+              sum(rate(http_request_duration_ms_bucket{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[6h])) by (le)
+            ) > 120
+          )
+        for: 30m
+        labels:
+          team: ml-platform
+          severity: ticket
+          slo: end_to_end_latency
+          rollback_related: "true"
+        annotations:
+          summary: "Slow-burn latency regression for recommendation API"
+          runbook: "runbooks/rollback.md"
+          threshold: "p95 end-to-end latency must stay <= 120 ms"
+
+      - alert: HighErrorRateBurnRate
+        severity: page
+        description: >
+          Error rate for POST /v1/recommendations is above the 0.5% SLO threshold
+          in both short and long windows.
+        expr: >
+          (
+            1 -
+            (
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations",
+                status=~"2.."
+              }[5m]))
+              /
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[5m]))
+            )
+          ) > 0.005
+          and
+          (
+            1 -
+            (
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations",
+                status=~"2.."
+              }[1h]))
+              /
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[1h]))
+            )
+          ) > 0.005
+        for: 5m
+        labels:
+          team: ml-platform
+          severity: page
+          slo: error_rate
+          rollback_related: "true"
+        annotations:
+          summary: "High error-rate burn rate for recommendation API"
+          impact: "The service may be failing to return valid recommendations."
+          runbook: "runbooks/rollback.md"
+          threshold: "error rate must stay below 0.5%"
+          expected_model_version: "recsys-2026.06.07-001"
+
+      - alert: HighErrorRateSlowBurn
+        severity: ticket
+        description: >
+          Error rate is above the 0.5% threshold over a longer observation window.
+        expr: >
+          (
+            1 -
+            (
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations",
+                status=~"2.."
+              }[30m]))
+              /
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[30m]))
+            )
+          ) > 0.005
+          and
+          (
+            1 -
+            (
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations",
+                status=~"2.."
+              }[6h]))
+              /
+              sum(rate(http_requests_total{
+                service="retail-recommender",
+                endpoint="/v1/recommendations"
+              }[6h]))
+            )
+          ) > 0.005
+        for: 30m
+        labels:
+          team: ml-platform
+          severity: ticket
+          slo: error_rate
+          rollback_related: "true"
+        annotations:
+          summary: "Slow-burn error-rate regression for recommendation API"
+          runbook: "runbooks/rollback.md"
+          threshold: "error rate must stay below 0.5%"
+
+  - name: retail-recommender-model-alerts
+    owner_team: ml-platform
+    service: retail-recommender
+    model_name: retail-home-recommender
+    expected_model_version: recsys-2026.06.07-001
+
+    rules:
+      - alert: ModelVersionMismatch
+        severity: page
+        description: >
+          A production replica is serving a model version different from the
+          expected production version in the model registry.
+        expr: >
+          count(model_version_info{
+            service="retail-recommender",
+            model_version!="recsys-2026.06.07-001"
+          }) > 0
+        for: 2m
+        labels:
+          team: ml-platform
+          severity: page
+          slo: model_version_consistency
+          rollback_related: "true"
+        annotations:
+          summary: "Production is serving an unexpected model version"
+          impact: "Recommendations may be produced by an unapproved model."
+          expected_model_version: "recsys-2026.06.07-001"
+          required_header: "X-Model-Version: recsys-2026.06.07-001"
+          runbook: "runbooks/rollback.md"
+          action: "Redeploy the expected image or roll back to the previous stable image."
+
+      - alert: FeatureDriftDetected
+        severity: ticket
+        description: >
+          Feature distribution drift is above the allowed threshold for the
+          production model version.
+        expr: >
+          feature_drift_score{
+            service="retail-recommender",
+            model_version="recsys-2026.06.07-001"
+          } > 0.20
+        for: 24h
+        labels:
+          team: ml-platform
+          severity: ticket
+          rollback_related: "false"
+        annotations:
+          summary: "Feature drift detected for recommendation model"
+          impact: "User behavior or catalog distribution may have shifted."
+          threshold: "feature_drift_score must stay <= 0.20"
+          action: "Investigate feature distribution and consider retraining."
+
+      - alert: ModelScoringLatencyHigh
+        severity: page
+        description: >
+          Model scoring p95 latency is above the 35 ms budget.
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(model_scoring_duration_ms_bucket{
+              service="retail-recommender",
+              model_version="recsys-2026.06.07-001"
+            }[5m])) by (le)
+          ) > 35
+        for: 5m
+        labels:
+          team: ml-platform
+          severity: page
+          slo: model_scoring_latency
+          rollback_related: "true"
+        annotations:
+          summary: "Model scoring latency is above budget"
+          threshold: "model scoring p95 must stay <= 35 ms"
+          runbook: "runbooks/rollback.md"
+
+  - name: retail-recommender-feature-cache-alerts
+    owner_team: ml-platform
+    service: retail-recommender
+
+    rules:
+      - alert: FeatureCacheLatencyHigh
+        severity: page
+        description: >
+          Online feature cache lookup p95 latency is above the 20 ms budget.
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(feature_cache_lookup_duration_ms_bucket{
+              service="retail-recommender"
+            }[5m])) by (le)
+          ) > 20
+        for: 5m
+        labels:
+          team: ml-platform
+          severity: page
+          slo: feature_cache_latency
+          rollback_related: "false"
+        annotations:
+          summary: "Feature cache latency is above budget"
+          impact: "Recommendation latency may increase or fallback usage may rise."
+          threshold: "feature cache lookup p95 must stay <= 20 ms"
+          runbook: "runbooks/rollback.md"
+
+      - alert: FeatureCacheHitRateLow
+        severity: ticket
+        description: >
+          Feature cache hit rate is lower than expected.
+        expr: >
+          feature_cache_hit_rate{
+            service="retail-recommender"
+          } < 0.95
+        for: 15m
+        labels:
+          team: ml-platform
+          severity: ticket
+          rollback_related: "false"
+        annotations:
+          summary: "Feature cache hit rate is low"
+          impact: "More users may receive fallback recommendations."
+          threshold: "feature cache hit rate should stay >= 95%"
+          action: "Check feature ingestion, cache backfill, and recent schema changes."
+
+      - alert: RecommendationFallbackSpike
+        severity: page
+        description: >
+          Fallback recommendation rate increased more than 25% over baseline.
+          Fallback responses are successful, but a spike may indicate cache,
+          feature schema, or model runtime problems.
+        expr: >
+          (
+            (
+              sum(rate(recommendation_fallback_total{
+                service="retail-recommender"
+              }[15m]))
+              /
+              sum(rate(recommendation_requests_total{
+                service="retail-recommender"
+              }[15m]))
+            )
+            -
+            recommendation_fallback_rate_baseline{
+              service="retail-recommender"
+            }
+          )
+          /
+          recommendation_fallback_rate_baseline{
+            service="retail-recommender"
+          } > 0.25
+        for: 15m
+        labels:
+          team: ml-platform
+          severity: page
+          slo: fallback_rate
+          rollback_related: "true"
+        annotations:
+          summary: "Recommendation fallback rate spiked"
+          impact: "Users are receiving less personalized recommendations."
+          threshold: "fallback rate increase must stay <= 25% over baseline"
+          runbook: "runbooks/rollback.md"
+          action: "Investigate cache, feature schema, and model runtime. Roll back if linked to the new model."
+
+  - name: retail-recommender-canary-alerts
+    owner_team: ml-platform
+    service: retail-recommender
+    expected_model_version: recsys-2026.06.07-001
+
+    rules:
+      - alert: CanaryLatencyRegression
+        severity: page
+        description: >
+          Canary model latency is worse than control and violates the 120 ms
+          end-to-end p95 latency budget.
+        expr: >
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_ms_bucket{
+              service="retail-recommender",
+              endpoint="/v1/recommendations",
+              ab_variant="treatment"
+            }[5m])) by (le)
+          ) > 120
+        for: 5m
+        labels:
+          team: ml-platform
+          severity: page
+          rollback_related: "true"
+        annotations:
+          summary: "Canary latency regression detected"
+          runbook: "runbooks/rollback.md"
+          action: "Stop canary rollout and roll back to previous stable image."
+
+      - alert: CanaryBusinessKPIRegression
+        severity: page
+        description: >
+          Canary treatment group has a critical online KPI regression compared
+          with the control group.
+        expr: >
+          (
+            recommendation_ctr{
+              service="retail-recommender",
+              ab_variant="treatment"
+            }
+            /
+            recommendation_ctr{
+              service="retail-recommender",
+              ab_variant="control"
+            }
+          ) < 0.95
+        for: 30m
+        labels:
+          team: ml-platform
+          severity: page
+          rollback_related: "true"
+        annotations:
+          summary: "Canary business KPI regression detected"
+          impact: "The new recommendation model may reduce user engagement."
+          threshold: "treatment CTR must not drop more than 5% vs control"
+          runbook: "runbooks/rollback.md"
+          action: "Stop canary rollout and review with Product Owner and ML Lead."

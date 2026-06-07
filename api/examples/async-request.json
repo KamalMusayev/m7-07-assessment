@@ -1,0 +1,20 @@
+{
+  "job_id": "job_recs_2026_06_07_001",
+  "priority": "normal",
+  "callback_url": "https://internal-client.example.com/recommendation-callback",
+  "requests": [
+    {
+      "request_id": "req_async_001",
+      "user_id": "user_12345",
+      "session_id": "sess_abc123",
+      "context": {
+        "region": "AZ-BA",
+        "locale": "en-US",
+        "device_type": "ios",
+        "placement": "home_screen"
+      },
+      "limit": 10,
+      "include_explanations": false
+    }
+  ]
+}
