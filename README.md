@@ -2,38 +2,60 @@
 
 ## Executive Summary
 
-This repository designs an MLOps system for **Scenario X: personalized in-app recommendations for a B2C retail mobile application**. The system serves product recommendations on every home-screen load, supports **800 RPS at peak**, and targets a **120 ms end-to-end p95 latency budget**. It uses a low-latency online recommendation service backed by an online feature cache, a versioned model registry, containerized model serving, OpenAPI-defined sync, batch, and async endpoints, CI/CD promotion gates, burn-rate monitoring, drift detection, and a rollback runbook that can be executed during an incident.
+This repository designs an MLOps system for **Scenario X: personalized in-app recommendations for a B2C retail mobile application**. The system serves product recommendations on every home-screen load, supports **800 RPS at peak**, and targets a **120 ms end-to-end p95 latency budget**. It uses a low-latency online recommendation service, an online feature cache, a versioned model registry, containerized model serving, OpenAPI-defined sync, batch, and async endpoints, CI/CD promotion gates, burn-rate monitoring, drift detection, and a rollback runbook for safe production recovery.
 
 ## Architecture Diagram
 
-The high-level system has two main paths:
+The system has two main paths:
 
 1. **Online serving path** — handles real-time recommendation requests from the mobile app.
-2. **Offline lifecycle path** — collects events, builds features, trains and evaluates models, registers approved versions, and deploys them through CI/CD.
+2. **Offline model lifecycle path** — collects events, builds features, trains and evaluates models, registers approved versions, and deploys them through CI/CD.
 
 ```mermaid
-flowchart LR
-    Mobile[Mobile App] --> Gateway[API Gateway]
-    Gateway --> RecService[Recommendation Service]
+flowchart TB
+    subgraph Client["Client Layer"]
+        A[Mobile App]
+    end
 
-    RecService --> FeatureCache[Online Feature Cache]
-    RecService --> ModelRuntime[Model Runtime]
-    RecService --> Catalog[Product Catalog]
-    RecService --> Experiment[Experiment Service]
+    subgraph Serving["Online Serving Path"]
+        B[API Gateway]
+        C[Recommendation Service]
+        D[Online Feature Cache]
+        E[Model Runtime]
+        F[Product Catalog]
+        G[Experiment Service]
+        H[Ranked Recommendations]
+    end
 
-    RecService --> Response[Ranked Recommendations]
+    subgraph ML["Model Lifecycle"]
+        I[User Browsing and Purchase Events]
+        J[Event Stream]
+        K[Offline Feature Store]
+        L[Training Pipeline]
+        M[Model Registry]
+        N[CI/CD Pipeline]
+    end
 
-    MobileEvents[User Browsing and Purchase Events] --> Stream[Event Stream]
-    Stream --> OfflineStore[Offline Feature Store]
-    OfflineStore --> Training[Training Pipeline]
-    Training --> Registry[Model Registry]
-    Registry --> CICD[CI/CD Pipeline]
-    CICD --> ModelRuntime
+    subgraph Ops["Operations"]
+        O[Metrics and Logs]
+        P[Monitoring Alerts]
+        Q[Rollback Runbook]
+    end
 
-    RecService --> Metrics[Metrics and Logs]
-    ModelRuntime --> Metrics
-    Metrics --> Alerts[Monitoring Alerts]
-    Alerts --> Runbook[Rollback Runbook]
+    A --> B --> C
+    C --> D
+    C --> E
+    C --> F
+    C --> G
+    C --> H
+    H --> A
+
+    I --> J --> K --> L --> M --> N --> E
+
+    C --> O
+    E --> O
+    D --> O
+    O --> P --> Q
 ```
 
 For the detailed architecture and trade-offs, see [`architecture/architecture.md`](architecture/architecture.md) and [`architecture/JUSTIFICATION.md`](architecture/JUSTIFICATION.md).
@@ -45,12 +67,13 @@ For the detailed architecture and trade-offs, see [`architecture/architecture.md
 | Scenario | Personalized in-app recommendations |
 | Peak traffic | 800 RPS |
 | End-to-end p95 latency budget | 120 ms |
-| Recommendation service p95 target | 60 ms |
+| Recommendation Service p95 target | 60 ms |
 | Availability SLO | 99.9% monthly |
+| Success-rate SLO | ≥ 99.5% successful recommendation responses |
 | Latency SLO | p95 ≤ 120 ms end-to-end |
-| Error-rate SLO | ≥ 99.5% successful recommendation responses |
 | Production model | `retail-home-recommender` |
 | Production model version | `recsys-2026.06.07-001` |
+| Previous stable version | `recsys-2026.05.31-004` |
 | Container image | `ghcr.io/acme-retail/retail-recommender:recsys-2026.06.07-001` |
 | Model size estimate | ~250 MB |
 | Model packaging strategy | Baked into the container image |
@@ -67,25 +90,23 @@ For the detailed architecture and trade-offs, see [`architecture/architecture.md
 | Architecture justification | [`architecture/JUSTIFICATION.md`](architecture/JUSTIFICATION.md) | Explains why this design fits the scenario |
 | ADRs | [`architecture/adr/`](architecture/adr/) | Records the most important design trade-offs |
 | Lifecycle | [`lifecycle/lifecycle.md`](lifecycle/lifecycle.md) | End-to-end model lifecycle from data to production |
-| Model registry | [`lifecycle/model-registry.yaml`](lifecycle/model-registry.yaml) | Registry fields, versions, gates, and lineage |
+| Model registry | [`lifecycle/model-registry.yaml`](lifecycle/model-registry.yaml) | Registry fields, versions, gates, approvals, and lineage |
 | Container | [`container/Dockerfile`](container/Dockerfile) | Reviewable multi-stage inference image |
-| Container plan | [`container/README.md`](container/README.md) | Image strategy, base image, size estimate, and runtime plan |
+| Container plan | [`container/README.md`](container/README.md) | Image strategy, bake-vs-mount choice, base image, and size estimate |
 | API contract | [`api/openapi.yaml`](api/openapi.yaml) | OpenAPI 3.1 contract for sync, batch, and async endpoints |
-| API examples | [`api/examples/`](api/examples/) | Sample requests and responses |
-| Serving | [`serving/capacity-plan.md`](serving/capacity-plan.md) | Capacity math, latency budget, and scaling assumptions |
-| SLOs | [`serving/slos.yaml`](serving/slos.yaml) | Measurable SLO objectives |
+| API examples | [`api/examples/`](api/examples/) | Sample request and response payloads |
+| Serving capacity | [`serving/capacity-plan.md`](serving/capacity-plan.md) | Capacity math, latency budget, and scaling assumptions |
+| SLOs | [`serving/slos.yaml`](serving/slos.yaml) | Measurable production objectives |
 | Load testing | [`serving/load-test-plan.md`](serving/load-test-plan.md) | Load test stages and pass/fail gates |
-| CI/CD | [`cicd/.github/workflows/deploy-model.yml`](cicd/.github/workflows/deploy-model.yml) | Model deployment pipeline with security and production gates |
-| Monitoring | [`monitoring/alerts.yaml`](monitoring/alerts.yaml) | Burn-rate, drift, and model-version mismatch alerts |
+| CI/CD | [`cicd/.github/workflows/deploy-model.yml`](cicd/.github/workflows/deploy-model.yml) | Deployment pipeline with linting, security scanning, staging, and production gates |
+| Monitoring | [`monitoring/alerts.yaml`](monitoring/alerts.yaml) | Burn-rate, drift, fallback, and model-version mismatch alerts |
 | Rollback | [`runbooks/rollback.md`](runbooks/rollback.md) | Incident checklist for reverting to the previous stable model |
 
 ## Open Questions
 
-1. What business metric should be the primary online promotion gate: click-through rate, add-to-cart rate, revenue per session, or a weighted combination?
+1. Which business metric should be the primary online promotion gate: click-through rate, add-to-cart rate, revenue per session, or a weighted combination?
 2. How fresh must user behavior features be for personalization: near-real-time, hourly, or daily?
 3. Are there product categories or user segments where recommendations must be filtered for legal, safety, or business-policy reasons?
-
-
 
 
 
